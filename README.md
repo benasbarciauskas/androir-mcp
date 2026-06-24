@@ -12,6 +12,7 @@ devices and emulators: capture the screen, read the live UI tree, and drive
 input — backed entirely by `adb` + `uiautomator`, no native code and no
 device-side app.
 
+[![CI](https://github.com/benasbarciauskas/androir-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/benasbarciauskas/androir-mcp/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -178,15 +179,6 @@ This README and roadmap fill in as the project progresses.
 
 <p align="right"><a href="#readme-top">back to top ↑</a></p>
 
-## 🔒 Responsible use
-
-Use `androir-mcp` only on devices and accounts you are authorized to control,
-and follow the terms of the apps and services you automate. It is **not** built
-for anti-detection, evasion, proxy/SIM rotation, or multi-account farm
-orchestration aimed at evading platform integrity systems. See
-[`CLAUDE.md`](CLAUDE.md) for the enforced scope guardrail.
-
-<p align="right"><a href="#readme-top">back to top ↑</a></p>
 
 ## 📄 License
 
