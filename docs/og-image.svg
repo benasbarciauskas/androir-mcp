@@ -44,7 +44,7 @@
 
   <!-- meta line -->
   <text x="96" y="510" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-        font-size="26" fill="#5E7A6D">adb + uiautomator&#160;&#160;·&#160;&#160;real UI tree, not OCR&#160;&#160;·&#160;&#160;argv-safe&#160;&#160;·&#160;&#160;Apache-2.0</text>
+        font-size="26" fill="#5E7A6D">adb + uiautomator&#160;&#160;·&#160;&#160;real UI tree, not OCR&#160;&#160;·&#160;&#160;argv-safe</text>
 
   <!-- mcp pill -->
   <g transform="translate(1010,478)">
