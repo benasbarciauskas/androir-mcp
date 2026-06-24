@@ -1,0 +1,60 @@
+name: Bug report
+description: Report something that isn't working as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in the sections
+        below so the issue can be reproduced. Do **not** paste secrets, tokens,
+        or device identifiers you'd rather keep private.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you observed.
+      placeholder: When I call `describe_screen`, the tool returns an empty element list.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence of tool calls or commands that triggers it.
+      placeholder: |
+        1. Connect device over `adb`
+        2. Call `launch_app("settings")`
+        3. Call `describe_screen()`
+        4. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Environment
+      description: |
+        Versions help a lot. Run the commands and paste the output.
+      value: |
+        - androir-mcp version:
+        - `adb --version`:
+        - `adb devices -l` (device model / state, redact serials if needed):
+        - Device / Android OS version:
+        - Host OS:
+        - Node version (`node --version`):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output (optional)
+      description: Relevant tool output or error messages. Redact anything sensitive.
+      render: text
+    validations:
+      required: false
