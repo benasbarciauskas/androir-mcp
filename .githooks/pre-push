@@ -1,0 +1,28 @@
+#!/bin/sh
+# Reject pushes that introduce likely secrets (filenames only in output).
+
+set -e
+
+PATTERNS='sk-|ghp_|shpat_|AKIA|BEGIN PRIVATE KEY|api_key='
+
+while read local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    range="$local_sha"
+  else
+    range="${remote_sha}..${local_sha}"
+  fi
+
+  matches=$(git diff --name-only "$range" | while read -r file; do
+    git diff "$range" -- "$file" | grep -E "$PATTERNS" >/dev/null 2>&1 && echo "$file"
+  done)
+
+  if [ -n "$matches" ]; then
+    echo "pre-push: rejected — possible secrets in:" >&2
+    echo "$matches" >&2
+    exit 1
+  fi
+done
+
+exit 0
