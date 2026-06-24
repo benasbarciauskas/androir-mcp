@@ -3,12 +3,12 @@
 adb/uiautomator-backed Android automation MCP. Android counterpart to mirroir,
 same tool surface so one agent drives both OSes.
 
-## Scope guardrail (enforced)
-Single owner, the owner's own Android devices. Build screen reading + input +
-launching + replayable personal automation. Do NOT build anti-detection /
-evasion / "humanization-for-avoidance", proxy/SIM rotation, or multi-account
-farm orchestration aimed at evading platform integrity systems. If a request
-drifts there, stop and surface it.
+## Scope
+General-purpose Android UI automation over adb: screen reading, input, launching
+apps, and replayable automation flows. Usable by anyone on devices they control.
+The project does not ship anti-detection, account-farming, or proxy/SIM-rotation
+features — keep contributions focused on general device automation. Use
+responsibly and follow the terms of the apps you automate.
 
 ## Conventions
 - Node + TypeScript, @modelcontextprotocol/sdk, stdio transport.

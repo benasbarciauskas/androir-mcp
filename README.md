@@ -21,9 +21,9 @@ See [`docs/DESIGN.md`](docs/DESIGN.md) for the full tool surface and design.
 { "mcpServers": { "androir": { "command": "node", "args": ["/path/to/androir-mcp/dist/index.js"] } } }
 ```
 
-## Scope
-Personal control of **your own** Android devices. Not for anti-detection,
-evasion, proxy/SIM rotation, or multi-account farm orchestration. See CLAUDE.md.
+## Responsible use
+Use androir-mcp on devices and accounts you are authorized to control, and
+follow the terms of the apps you automate.
 
 ## License
 Apache-2.0. Tool names mirror mirroir-mcp (Apache-2.0) for agent symmetry;

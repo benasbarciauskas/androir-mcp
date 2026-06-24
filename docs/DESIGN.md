@@ -10,12 +10,11 @@ Give Android the same AI-automation surface mirroir gives iOS, so one
 differs (`mirroir` for iOS, `androir` for Android). Backed entirely by `adb` +
 `uiautomator`; no native code, no upstream fork.
 
-## Scope guardrail (inherited from PhoneHub)
+## Scope
 
-Single owner, the owner's own devices. Build device control + screen reading +
-replayable personal automation. Do NOT add anti-detection, humanization-for-
-evasion, proxy/SIM rotation, or multi-account farm orchestration. If a tool
-request drifts there, refuse.
+General-purpose Android UI automation over adb — usable by anyone on devices
+they control. The project stays focused on general device automation and does
+not ship anti-detection, account-farming, or proxy/SIM-rotation features.
 
 ## Where it lives
 
