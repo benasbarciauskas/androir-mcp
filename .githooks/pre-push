@@ -14,9 +14,17 @@ while read local_ref local_sha remote_ref remote_sha; do
     range="${remote_sha}..${local_sha}"
   fi
 
-  matches=$(git diff --name-only "$range" | while read -r file; do
-    git diff "$range" -- "$file" | grep -E "$PATTERNS" >/dev/null 2>&1 && echo "$file"
-  done)
+  matches=""
+  while read -r file; do
+    if [ "${file#.githooks/}" = "$file" ]; then
+      if git diff "$range" -- "$file" | grep '^+' | grep -v '^+++' | grep -E "$PATTERNS" >/dev/null 2>&1; then
+        matches="${matches}${file}
+"
+      fi
+    fi
+  done <<EOF
+$(git diff --name-only "$range")
+EOF
 
   if [ -n "$matches" ]; then
     echo "pre-push: rejected — possible secrets in:" >&2
