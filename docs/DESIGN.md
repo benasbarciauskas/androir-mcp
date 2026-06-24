@@ -69,11 +69,32 @@ compact text listing identical in spirit to mirroir's
 ## Boundaries / validation
 
 - Every serial + every interpolated value validated/escaped before `adb`.
+- Any string handed to the DEVICE shell (`input text`, `am start -d`) is
+  single-quoted for `/system/bin/sh` (`'` → `'\''`) so no shell metacharacter
+  can break out. `input text` spaces are sent as the `%s` sentinel inside the
+  quotes; a literal `%s` substring is the one input that cannot be typed
+  verbatim (it becomes a space) — a property of `input text` itself.
+- `describe_screen` XML-decodes the five named entities and numeric
+  (`&#NN;` / `&#xNN;`) references in `text`/`content-desc`. Node/attribute
+  extraction is tolerant: a literal `>` inside an attribute does not truncate
+  a tag, malformed/truncated XML never throws (whatever valid nodes were found
+  are returned), and nodes without parseable `bounds` are skipped.
+- `open_url` enforces a scheme allowlist: only `http://` and `https://` are
+  accepted; every other scheme (`file:`, `intent:`, `content:`, `tel:`, …) is
+  rejected at the boundary so a caller cannot fire arbitrary intents.
+- Coordinate tools (`tap`/`swipe`/`long_press`) validate x/y/duration as
+  non-negative integers.
 - `adb` resolved on PATH (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`) —
   GUI-launched agents don't inherit a login PATH. Surface a clear "adb not
   found" error.
-- Per-call timeout (default 30s) with process-group kill on timeout.
-- No secrets logged. Errors are concise, no stack traces to the model.
+- Per-call timeout (default 30s) with process-group kill on timeout; the
+  timeout/close/error paths use a single-settle guard so the promise can't
+  double-settle, and the spawn-error path also reaps the process group.
+- No secrets logged. Raw adb stderr (which can leak serials/device paths) is
+  mapped to concise, scrubbed messages ("device offline", "device
+  unauthorized", "adb command failed: …") — never raw stderr or host stack
+  traces to the model. Package-name resolution caches `pm list packages` per
+  serial (5-min TTL) so device B never resolves names against device A.
 
 ## Testing
 
