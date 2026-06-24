@@ -1,0 +1,24 @@
+<svg width="420" height="96" viewBox="0 0 420 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="androir-mcp">
+  <title>androir-mcp</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="80" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3DDC84"/>
+      <stop offset="1" stop-color="#2BB673"/>
+    </linearGradient>
+  </defs>
+
+  <!-- mark -->
+  <g transform="translate(8,8)">
+    <rect x="0" y="0" width="80" height="80" rx="18" fill="url(#tile)"/>
+    <g fill="none" stroke="#0B1F17" stroke-linecap="round" transform="translate(2.5,2.5) scale(0.78)">
+      <path d="M30 36a18 18 0 0 1 30.5 0" stroke-width="4" opacity="0.30"/>
+      <path d="M24 30a26 26 0 0 1 41.5 0" stroke-width="4" opacity="0.16"/>
+    </g>
+    <path transform="translate(2.5,2.5) scale(0.78)" d="M44 36 L44 70 L51 62.5 L57 75 L63 72 L57 60 L66 60 Z"
+          fill="#0B1F17" stroke="#0B1F17" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="104" y="58" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="34" font-weight="700" letter-spacing="-0.5" fill="#E8FBF1">androir<tspan fill="#3DDC84">-mcp</tspan></text>
+</svg>
