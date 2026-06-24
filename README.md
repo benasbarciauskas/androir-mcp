@@ -1,14 +1,13 @@
 # androir-mcp
 
-Android automation MCP server — the Android counterpart to
-[mirroir-mcp](https://github.com/jfarcand/mirroir-mcp). Exposes the same tool
-surface (`screenshot`, `describe_screen`, `tap`, `swipe`, `type_text`,
-`launch_app`, …) so one AI agent loop drives **both** iOS (via mirroir) and
-Android (via this) unchanged — only the attached MCP differs.
+An MCP server for automating real Android devices over `adb` and `uiautomator`.
+Screenshot the screen, read the on-screen UI tree, tap/swipe/type, and launch
+apps — from any MCP client.
 
 Backed entirely by `adb` + `uiautomator`. No native code, no device-side app.
-On Android `describe_screen` returns the real UI tree (exact element bounds +
-text) — more reliable than OCR.
+`describe_screen` returns the real UI tree (exact element bounds + text), which
+is far more reliable than OCR. The tool set is a conventional screen-read +
+input surface, so it drops into any MCP-based agent loop.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full tool surface and design.
 
@@ -26,5 +25,4 @@ Personal control of **your own** Android devices. Not for anti-detection,
 evasion, proxy/SIM rotation, or multi-account farm orchestration. See CLAUDE.md.
 
 ## License
-Apache-2.0. Tool names mirror mirroir-mcp (Apache-2.0) for agent symmetry;
-independent adb-backed implementation.
+Apache-2.0.
