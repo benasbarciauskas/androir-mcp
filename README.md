@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="assets/logo.svg" width="96" height="96" alt="androir-mcp logo">
+
 # androir-mcp
 
 **Drive real Android devices from any AI agent — see the screen, tap, swipe, type, over `adb`.**
