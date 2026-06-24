@@ -1,7 +1,7 @@
 # androir-mcp
 
-adb/uiautomator-backed Android automation MCP. Android counterpart to mirroir,
-same tool surface so one agent drives both OSes.
+An adb/uiautomator-backed MCP server for automating real Android devices:
+screen reading, input (tap/swipe/type), and app launching from any MCP client.
 
 ## Scope guardrail (enforced)
 Single owner, the owner's own Android devices. Build screen reading + input +

@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  AdbError,
   isValidSerial,
   resolveSerial,
   runAdb,
@@ -15,6 +16,11 @@ const KEY_MAP: Record<string, number> = {
   recents: 187,
 };
 
+// open_url scheme allowlist. Only these schemes may be handed to
+// `am start -d`; everything else is rejected at the boundary so a caller
+// cannot fire arbitrary intents (file://, intent://, content://, tel:, ...).
+const URL_SCHEME_RE = /^https?:\/\//i;
+
 function textResult(text: string, isError = false) {
   return {
     content: [{ type: "text" as const, text }],
@@ -22,24 +28,47 @@ function textResult(text: string, isError = false) {
   };
 }
 
-function escapeInputText(text: string): string {
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/'/g, "\\'")
-    .replace(/ /g, "%s")
-    .replace(/&/g, "\\&")
-    .replace(/</g, "\\<")
-    .replace(/>/g, "\\>")
-    .replace(/\|/g, "\\|")
-    .replace(/;/g, "\\;")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/\$/g, "\\$")
-    .replace(/`/g, "\\`")
-    .replace(/!/g, "\\!")
-    .replace(/\*/g, "\\*")
-    .replace(/\?/g, "\\?");
+/** Map any thrown error to a concise, scrubbed message for the MCP client. */
+function errorResult(err: unknown) {
+  if (err instanceof AdbError) {
+    return textResult(err.message, true);
+  }
+  // Never surface a host stack trace or raw internal detail to the model.
+  const msg = err instanceof Error ? err.message : String(err);
+  return textResult(msg.split("\n")[0].slice(0, 200), true);
+}
+
+/**
+ * Quote an arbitrary string as a SINGLE device-shell token.
+ *
+ * Why: `adb shell <args...>` does NOT exec argv on the device. The adb client
+ * joins everything after `shell` with single spaces into one command string
+ * that the device's `/system/bin/sh` re-parses. So any value we pass must
+ * already be quoted *for the device shell*. We wrap it in single quotes
+ * (inside which every byte is literal) and escape an embedded `'` as `'\''`
+ * (close-quote, escaped-quote, re-open-quote). No metachar can break out.
+ */
+export function shellQuote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Produce the single device-shell token for `input text`.
+ *
+ * `input text` has its own rule: a LITERAL space is an argument separator, so
+ * spaces must be sent as the sentinel `%s`, which `input` converts back to a
+ * space. We do that replacement INSIDE the single quotes, where `%s` reaches
+ * `input` verbatim (the device shell never touches `%`). Everything else is
+ * passed literally, so the text appears on screen exactly as given and no
+ * shell metacharacter can break out of the quotes.
+ *
+ * Known limitation (a property of `input text` itself, not our quoting): a
+ * literal `%s` substring in the user's text is indistinguishable from the
+ * space sentinel and is typed as a space. Every other byte -- including a lone
+ * `%` -- is verbatim.
+ */
+export function quoteInputText(text: string): string {
+  return shellQuote(text.replace(/ /g, "%s"));
 }
 
 function parseDevicesLong(output: string) {
@@ -99,10 +128,21 @@ async function dumpUiXml(serial: string): Promise<string> {
   return buf.toString("utf8");
 }
 
-let packageCache: Map<string, string> | null = null;
+// Package lists are device-specific, so the cache is keyed by serial -- never
+// resolve device B's app names against device A's package list.
+interface PackageCacheEntry {
+  packages: Map<string, string>;
+  loadedAt: number;
+}
+
+const PACKAGE_TTL_MS = 5 * 60_000;
+const packageCache = new Map<string, PackageCacheEntry>();
 
 async function loadPackages(serial: string): Promise<Map<string, string>> {
-  if (packageCache) return packageCache;
+  const cached = packageCache.get(serial);
+  if (cached && Date.now() - cached.loadedAt < PACKAGE_TTL_MS) {
+    return cached.packages;
+  }
 
   const buf = await runAdbShell(serial, ["pm", "list", "packages"]);
   const lines = buf.toString("utf8").split("\n");
@@ -116,7 +156,7 @@ async function loadPackages(serial: string): Promise<Map<string, string>> {
     }
   }
 
-  packageCache = map;
+  packageCache.set(serial, { packages: map, loadedAt: Date.now() });
   return map;
 }
 
@@ -156,7 +196,7 @@ async function resolvePackage(
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous app name "${trimmed}" (${matches.slice(0, 5).join(", ")}${matches.length > 5 ? ", …" : ""})`,
+      `Ambiguous app name "${trimmed}" (${matches.slice(0, 5).join(", ")}${matches.length > 5 ? ", ..." : ""})`,
     );
   }
 
@@ -164,88 +204,118 @@ async function resolvePackage(
 }
 
 export async function toolListTargets() {
-  const buf = await runAdb(undefined, ["devices", "-l"]);
-  const targets = parseDevicesLong(buf.toString("utf8"));
-  return textResult(JSON.stringify(targets, null, 2));
+  try {
+    const buf = await runAdb(undefined, ["devices", "-l"]);
+    const targets = parseDevicesLong(buf.toString("utf8"));
+    return textResult(JSON.stringify(targets, null, 2));
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolStatus(serial?: string) {
-  const s = await resolveSerial(serial);
-
-  const stateBuf = await runAdb(s, ["get-state"]);
-  const state = stateBuf.toString("utf8").trim();
-
-  const props: Record<string, string> = {};
-  const propKeys = [
-    "ro.product.model",
-    "ro.product.manufacturer",
-    "ro.build.version.release",
-    "ro.build.version.sdk",
-  ];
-
-  for (const key of propKeys) {
-    try {
-      const val = await runAdbShell(s, ["getprop", key]);
-      props[key] = val.toString("utf8").trim();
-    } catch {
-      props[key] = "";
-    }
-  }
-
-  let battery: Record<string, string> = {};
   try {
-    const batBuf = await runAdbShell(s, ["dumpsys", "battery"]);
-    const batText = batBuf.toString("utf8");
-    for (const line of batText.split("\n")) {
-      const m = line.match(/^\s*(level|status|health|AC powered|USB powered):\s*(.+)$/i);
-      if (m) battery[m[1].toLowerCase()] = m[2].trim();
-    }
-  } catch {
-    battery = {};
-  }
+    const s = await resolveSerial(serial);
 
-  return textResult(
-    JSON.stringify({ serial: s, state, props, battery }, null, 2),
-  );
+    const stateBuf = await runAdb(s, ["get-state"]);
+    const state = stateBuf.toString("utf8").trim();
+
+    const props: Record<string, string> = {};
+    const propKeys = [
+      "ro.product.model",
+      "ro.product.manufacturer",
+      "ro.build.version.release",
+      "ro.build.version.sdk",
+    ];
+
+    for (const key of propKeys) {
+      try {
+        const val = await runAdbShell(s, ["getprop", key]);
+        props[key] = val.toString("utf8").trim();
+      } catch {
+        props[key] = "";
+      }
+    }
+
+    let battery: Record<string, string> = {};
+    try {
+      const batBuf = await runAdbShell(s, ["dumpsys", "battery"]);
+      const batText = batBuf.toString("utf8");
+      for (const line of batText.split("\n")) {
+        const m = line.match(/^\s*(level|status|health|AC powered|USB powered):\s*(.+)$/i);
+        if (m) battery[m[1].toLowerCase()] = m[2].trim();
+      }
+    } catch {
+      battery = {};
+    }
+
+    return textResult(
+      JSON.stringify({ serial: s, state, props, battery }, null, 2),
+    );
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolScreenshot(serial?: string) {
-  const s = await resolveSerial(serial);
-  const buf = await runAdb(s, ["exec-out", "screencap", "-p"], {
-    timeoutMs: 60_000,
-  });
+  try {
+    const s = await resolveSerial(serial);
+    const buf = await runAdb(s, ["exec-out", "screencap", "-p"], {
+      timeoutMs: 60_000,
+    });
 
-  if (buf.length < 8) {
-    return textResult("Screenshot empty", true);
+    // Validate the 8-byte PNG signature before claiming success -- a truncated
+    // or text/error payload must not be returned as a valid image.
+    const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const validPng =
+      buf.length >= 8 && PNG_MAGIC.every((b, i) => buf[i] === b);
+    if (!validPng) {
+      return textResult("Screenshot failed: not a valid PNG", true);
+    }
+
+    return {
+      content: [
+        {
+          type: "image" as const,
+          data: buf.toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+    };
+  } catch (err) {
+    return errorResult(err);
   }
-
-  return {
-    content: [
-      {
-        type: "image" as const,
-        data: buf.toString("base64"),
-        mimeType: "image/png",
-      },
-    ],
-  };
 }
 
 export async function toolDescribeScreen(serial?: string) {
-  const s = await resolveSerial(serial);
-  const xml = await dumpUiXml(s);
-  const elements = parseUiXml(xml);
+  try {
+    const s = await resolveSerial(serial);
+    const xml = await dumpUiXml(s);
+    const elements = parseUiXml(xml);
 
-  if (elements.length === 0) {
-    return textResult("No UI elements found", true);
+    if (elements.length === 0) {
+      return textResult("No UI elements found", true);
+    }
+
+    return textResult(formatElements(elements));
+  } catch (err) {
+    return errorResult(err);
   }
-
-  return textResult(formatElements(elements));
 }
 
+// Coordinates reach `input <tap|swipe>` as separate argv elements, but validate
+// them anyway: non-negative integers only, so no negative/float/NaN value can
+// flow through to the device.
+const coord = z.number().int().nonnegative();
+
 export async function toolTap(serial: string | undefined, x: number, y: number) {
-  const s = await resolveSerial(serial);
-  await runAdbShell(s, ["input", "tap", String(x), String(y)]);
-  return textResult(`Tapped (${x}, ${y})`);
+  try {
+    const s = await resolveSerial(serial);
+    await runAdbShell(s, ["input", "tap", String(x), String(y)]);
+    return textResult(`Tapped (${x}, ${y})`);
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolSwipe(
@@ -256,17 +326,21 @@ export async function toolSwipe(
   y2: number,
   duration = 300,
 ) {
-  const s = await resolveSerial(serial);
-  await runAdbShell(s, [
-    "input",
-    "swipe",
-    String(x1),
-    String(y1),
-    String(x2),
-    String(y2),
-    String(duration),
-  ]);
-  return textResult(`Swiped (${x1},${y1}) → (${x2},${y2}) in ${duration}ms`);
+  try {
+    const s = await resolveSerial(serial);
+    await runAdbShell(s, [
+      "input",
+      "swipe",
+      String(x1),
+      String(y1),
+      String(x2),
+      String(y2),
+      String(duration),
+    ]);
+    return textResult(`Swiped (${x1},${y1}) -> (${x2},${y2}) in ${duration}ms`);
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolLongPress(
@@ -275,83 +349,114 @@ export async function toolLongPress(
   y: number,
   duration = 1000,
 ) {
-  const s = await resolveSerial(serial);
-  await runAdbShell(s, [
-    "input",
-    "swipe",
-    String(x),
-    String(y),
-    String(x),
-    String(y),
-    String(duration),
-  ]);
-  return textResult(`Long-pressed (${x}, ${y}) for ${duration}ms`);
+  try {
+    const s = await resolveSerial(serial);
+    await runAdbShell(s, [
+      "input",
+      "swipe",
+      String(x),
+      String(y),
+      String(x),
+      String(y),
+      String(duration),
+    ]);
+    return textResult(`Long-pressed (${x}, ${y}) for ${duration}ms`);
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolTypeText(serial: string | undefined, text: string) {
-  const s = await resolveSerial(serial);
-  const escaped = escapeInputText(text);
-  await runAdbShell(s, ["input", "text", escaped]);
-  return textResult(`Typed ${text.length} characters`);
+  try {
+    const s = await resolveSerial(serial);
+    const arg = quoteInputText(text);
+    await runAdbShell(s, ["input", "text", arg]);
+    return textResult(`Typed ${text.length} characters`);
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolPressKey(serial: string | undefined, key: string) {
-  const s = await resolveSerial(serial);
-  const code = KEY_MAP[key.toLowerCase()];
-  if (code === undefined) {
-    return textResult(
-      `Unknown key "${key}". Use: ${Object.keys(KEY_MAP).join(", ")}`,
-      true,
-    );
+  try {
+    const s = await resolveSerial(serial);
+    const code = KEY_MAP[key.toLowerCase()];
+    if (code === undefined) {
+      return textResult(
+        `Unknown key "${key}". Use: ${Object.keys(KEY_MAP).join(", ")}`,
+        true,
+      );
+    }
+    await runAdbShell(s, ["input", "keyevent", String(code)]);
+    return textResult(`Pressed ${key} (keyevent ${code})`);
+  } catch (err) {
+    return errorResult(err);
   }
-  await runAdbShell(s, ["input", "keyevent", String(code)]);
-  return textResult(`Pressed ${key} (keyevent ${code})`);
 }
 
 export async function toolPressHome(serial?: string) {
-  const s = await resolveSerial(serial);
-  await runAdbShell(s, ["input", "keyevent", "3"]);
-  return textResult("Pressed home");
+  try {
+    const s = await resolveSerial(serial);
+    await runAdbShell(s, ["input", "keyevent", "3"]);
+    return textResult("Pressed home");
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolPressBack(serial?: string) {
-  const s = await resolveSerial(serial);
-  await runAdbShell(s, ["input", "keyevent", "4"]);
-  return textResult("Pressed back");
+  try {
+    const s = await resolveSerial(serial);
+    await runAdbShell(s, ["input", "keyevent", "4"]);
+    return textResult("Pressed back");
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolLaunchApp(serial: string | undefined, nameOrPkg: string) {
-  const s = await resolveSerial(serial);
-  const pkg = await resolvePackage(s, nameOrPkg);
+  try {
+    const s = await resolveSerial(serial);
+    const pkg = await resolvePackage(s, nameOrPkg);
 
-  await runAdbShell(s, [
-    "monkey",
-    "-p",
-    pkg,
-    "-c",
-    "android.intent.category.LAUNCHER",
-    "1",
-  ]);
+    await runAdbShell(s, [
+      "monkey",
+      "-p",
+      pkg,
+      "-c",
+      "android.intent.category.LAUNCHER",
+      "1",
+    ]);
 
-  return textResult(`Launched ${pkg}`);
+    return textResult(`Launched ${pkg}`);
+  } catch (err) {
+    return errorResult(err);
+  }
 }
 
 export async function toolOpenUrl(serial: string | undefined, url: string) {
-  const s = await resolveSerial(serial);
-  if (!url || !/^https?:\/\//i.test(url)) {
-    return textResult("URL must start with http:// or https://", true);
+  try {
+    // Scheme allowlist: only http(s). The URL is also handed to the DEVICE
+    // shell (`am start -d <url>`), so it is single-quoted like type_text so a
+    // query string such as `?a=1&b=2` (or any metachar) cannot break out.
+    if (!url || !URL_SCHEME_RE.test(url)) {
+      return textResult("URL must start with http:// or https://", true);
+    }
+
+    const s = await resolveSerial(serial);
+    await runAdbShell(s, [
+      "am",
+      "start",
+      "-a",
+      "android.intent.action.VIEW",
+      "-d",
+      shellQuote(url),
+    ]);
+
+    return textResult(`Opened ${url}`);
+  } catch (err) {
+    return errorResult(err);
   }
-
-  await runAdbShell(s, [
-    "am",
-    "start",
-    "-a",
-    "android.intent.action.VIEW",
-    "-d",
-    url,
-  ]);
-
-  return textResult(`Opened ${url}`);
 }
 
 const optionalSerial = z
@@ -392,8 +497,8 @@ export function registerTools(server: McpServer): void {
     "Tap at screen coordinates (device pixels)",
     {
       serial: optionalSerial,
-      x: z.number().describe("X coordinate"),
-      y: z.number().describe("Y coordinate"),
+      x: coord.describe("X coordinate"),
+      y: coord.describe("Y coordinate"),
     },
     async ({ serial, x, y }) => toolTap(serial, x, y),
   );
@@ -403,11 +508,16 @@ export function registerTools(server: McpServer): void {
     "Swipe from (x1,y1) to (x2,y2)",
     {
       serial: optionalSerial,
-      x1: z.number().describe("Start X"),
-      y1: z.number().describe("Start Y"),
-      x2: z.number().describe("End X"),
-      y2: z.number().describe("End Y"),
-      duration: z.number().optional().describe("Duration in ms (default 300)"),
+      x1: coord.describe("Start X"),
+      y1: coord.describe("Start Y"),
+      x2: coord.describe("End X"),
+      y2: coord.describe("End Y"),
+      duration: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Duration in ms (default 300)"),
     },
     async ({ serial, x1, y1, x2, y2, duration }) =>
       toolSwipe(serial, x1, y1, x2, y2, duration ?? 300),
@@ -418,9 +528,14 @@ export function registerTools(server: McpServer): void {
     "Long press at (x,y)",
     {
       serial: optionalSerial,
-      x: z.number().describe("X coordinate"),
-      y: z.number().describe("Y coordinate"),
-      duration: z.number().optional().describe("Duration in ms (default 1000)"),
+      x: coord.describe("X coordinate"),
+      y: coord.describe("Y coordinate"),
+      duration: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Duration in ms (default 1000)"),
     },
     async ({ serial, x, y, duration }) =>
       toolLongPress(serial, x, y, duration ?? 1000),
@@ -472,7 +587,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "open_url",
-    "Open URL in default browser",
+    "Open an http(s) URL in the default browser",
     {
       serial: optionalSerial,
       url: z.string().describe("HTTP(S) URL"),

@@ -14,6 +14,43 @@ const ADB_SEARCH_PATHS = [
 
 let cachedAdbPath: string | null = null;
 
+/**
+ * A failure from adb whose message is already concise and safe to surface to
+ * the MCP client. Raw adb stderr (which can leak serials, device file paths,
+ * etc.) is mapped to one of these before it ever reaches the caller.
+ */
+export class AdbError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdbError";
+  }
+}
+
+/**
+ * Reduce raw adb stderr to a short, scrubbed message. adb error text can
+ * include the device serial, on-device file paths, and other internals; none
+ * of that should reach the model. We classify the common cases and otherwise
+ * return a generic, length-capped summary with no host/device detail.
+ */
+function scrubAdbError(stderr: string, code: number | null): string {
+  const lower = stderr.toLowerCase();
+  if (lower.includes("device offline")) return "device offline";
+  if (lower.includes("device unauthorized") || lower.includes("unauthorized")) {
+    return "device unauthorized (accept the USB debugging prompt)";
+  }
+  if (lower.includes("no devices") || lower.includes("device not found")) {
+    return "device not found";
+  }
+  if (lower.includes("more than one device")) {
+    return "multiple devices connected; specify a serial";
+  }
+  if (lower.includes("permission denied")) return "adb command failed: permission denied";
+  // Generic fallback: first line only, capped, no paths/serials beyond that.
+  const firstLine = stderr.split("\n")[0]?.trim() ?? "";
+  const summary = firstLine ? firstLine.slice(0, 80) : `exit ${code ?? "?"}`;
+  return `adb command failed: ${summary}`;
+}
+
 function isExecutable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
@@ -43,7 +80,7 @@ export function resolveAdb(): string {
     }
   }
 
-  throw new Error(
+  throw new AdbError(
     "adb not found. Install Android platform-tools and ensure adb is on PATH.",
   );
 }
@@ -63,7 +100,7 @@ export async function runAdb(
   const fullArgs: string[] = [];
   if (serial !== undefined) {
     if (!isValidSerial(serial)) {
-      throw new Error("Invalid device serial");
+      throw new AdbError("Invalid device serial");
     }
     fullArgs.push("-s", serial);
   }
@@ -78,30 +115,58 @@ export async function runAdb(
     const chunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
 
-    const timer = setTimeout(() => {
+    // Single-settle guard: whichever of close/error/timeout fires first wins;
+    // the others become no-ops. Without this, a timeout could reject AFTER a
+    // close already resolved (or vice versa) -- an unhandled double-settle.
+    let settled = false;
+
+    const killGroup = () => {
       try {
         if (child.pid !== undefined) {
           process.kill(-child.pid, "SIGKILL");
+        } else {
+          child.kill("SIGKILL");
         }
       } catch {
-        child.kill("SIGKILL");
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // process already gone
+        }
       }
-      reject(new Error(`adb timed out after ${timeoutMs}ms`));
+    };
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      killGroup();
+      reject(new AdbError(`adb timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => errChunks.push(chunk));
 
     child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      reject(err);
+      // Reap the detached process group too, so a partially-spawned child
+      // can't be orphaned holding the timeout open.
+      killGroup();
+      reject(
+        err instanceof Error && err.message.includes("ENOENT")
+          ? new AdbError("adb not found on PATH")
+          : new AdbError("adb command failed to start"),
+      );
     });
 
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (code !== 0) {
         const stderr = Buffer.concat(errChunks).toString("utf8").trim();
-        reject(new Error(stderr || `adb exited with code ${code}`));
+        reject(new AdbError(scrubAdbError(stderr, code)));
         return;
       }
       resolve(Buffer.concat(chunks));
@@ -151,7 +216,7 @@ export async function listDeviceSerials(): Promise<DeviceEntry[]> {
 export async function resolveSerial(provided?: string): Promise<string> {
   if (provided !== undefined && provided !== "") {
     if (!isValidSerial(provided)) {
-      throw new Error("Invalid device serial");
+      throw new AdbError("Invalid device serial");
     }
     return provided;
   }
@@ -160,10 +225,10 @@ export async function resolveSerial(provided?: string): Promise<string> {
   const ready = devices.filter((d) => d.state === "device");
 
   if (ready.length === 0) {
-    throw new Error("No Android device connected");
+    throw new AdbError("No Android device connected");
   }
   if (ready.length > 1) {
-    throw new Error(
+    throw new AdbError(
       `Multiple devices connected (${ready.map((d) => d.serial).join(", ")}). Specify serial.`,
     );
   }
